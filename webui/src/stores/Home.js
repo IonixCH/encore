@@ -1,7 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { exec } from 'kernelsu'
+import { exec, toast } from 'kernelsu'
 import * as KernelSU from '@/helpers/KernelSU'
+import { getTranslation } from '@/helpers/Locales'
+import { useEncoreConfigStore } from '@/stores/EncoreConfig'
 
 const configPath = '/data/adb/.config/encore'
 const modPath = '/data/adb/modules/encore'
@@ -129,9 +131,33 @@ export const useHomeStore = defineStore('home', () => {
   async function getCurrentProfile() {
     try {
       const output = await KernelSU.readFile(`${configPath}/current_profile`)
+      const previous = currentProfileRaw.value
       currentProfileRaw.value = getProfileKey(output.trim())
+      notifyProfileChange(previous, currentProfileRaw.value)
     } catch (error) {
       currentProfileRaw.value = 'unknown'
+    }
+  }
+
+  // Toast while the WebUI is open. The daemon posts the system notification on its own,
+  // this is just the in-app counterpart and follows the same on/off setting.
+  async function notifyProfileChange(previous, current) {
+    // First read, daemon (re)starting, or not a real profile: nothing to announce
+    if (!previous || previous === 'unknown' || previous === 'initializing') return
+    if (previous === current) return
+    if (!['performance', 'balanced', 'powersave'].includes(current)) return
+
+    try {
+      const encoreConfigStore = useEncoreConfigStore()
+      if (!encoreConfigStore.isLoaded) {
+        await encoreConfigStore.loadConfig()
+      }
+      if (!encoreConfigStore.isProfileNotifyEnabled) return
+
+      const profileName = getTranslation(`profiles.${current}`)
+      toast(getTranslation('toast.profile_changed', { profile: profileName }))
+    } catch (error) {
+      console.warn('Unable to show profile change toast:', error)
     }
   }
 

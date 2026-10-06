@@ -76,3 +76,55 @@ void notify(const char *message) {
         LOGE("fork failed: {}", strerror(errno));
     }
 }
+
+// Runs a command with stdout/stderr silenced, returns its exit code
+// (or -1 when the fork or the command itself fails).
+static int run_silent(const char *path, char *const argv[]) {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        execvp(path, argv);
+        _exit(127);
+    }
+
+    if (pid < 0) {
+        LOGE("fork failed: {}", strerror(errno));
+        return -1;
+    }
+
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+void toast(const char *message) {
+    // Only proceed when the helper app is installed
+    char *const check_args[] = {
+        (char *)"cmd", (char *)"package", (char *)"path", (char *)"bellavita.toast", nullptr,
+    };
+
+    if (run_silent("/system/bin/cmd", check_args) != 0) {
+        LOGD("Toast helper app is not installed, skipping toast");
+        return;
+    }
+
+    char *const args[] = {
+        (char *)"cmd",     (char *)"activity",     (char *)"start",
+        (char *)"-a",      (char *)"android.intent.action.MAIN",
+        (char *)"-e",      (char *)"toasttext",    (char *)message,
+        (char *)"-n",      (char *)"bellavita.toast/.MainActivity",
+        nullptr,
+    };
+
+    int rc = run_silent("/system/bin/cmd", args);
+    if (rc != 0) [[unlikely]] {
+        LOGE("Failed to show toast with status: {}", rc);
+    }
+}

@@ -69,6 +69,10 @@
     "disable_tweaks": {
       "title": "Disable Tweaks",
       "description": "Disable all performance tweaks set by Encore Tweaks"
+    },
+    "profile_governors": {
+      "title": "Profile Governors",
+      "description": "Choose the CPU and GPU governor for each profile, plus profile notifications"
     }
   },
   "game_settings": {
@@ -127,7 +131,8 @@
     "reboot_to_apply": "Reboot your device to apply changes.",
     "has_shortcut": "Shortcut already exists.",
     "shortcut_unavailable": "No API available for this feature. Update your manager to use it.",
-    "failed_open_external_browser": "Failed to open external browser."
+    "failed_open_external_browser": "Failed to open external browser.",
+    "profile_changed": "{profile} profile active"
   },
   "navigation": {
     "home": "Home",
@@ -142,5 +147,18 @@
     "cancel": "Cancel",
     "warning": "Warning",
     "ok": "Okay"
+  },
+  "profile_governors": {
+    "title": "Profile Governors",
+    "notify_title": "Profile notifications",
+    "notify_brief": "Show a notification whenever the active profile changes. A toast is shown too if the Toast helper app (bellavita.toast) is installed.",
+    "cpu": "CPU governor",
+    "gpu": "GPU governor",
+    "gpu_unsupported": "Not supported on this device",
+    "gpu_keep": "Don't change (device default)",
+    "choose_cpu": "{profile}: CPU governor",
+    "choose_gpu": "{profile}: GPU governor",
+    "brief": "Pick the governor Encore applies to the CPU and GPU in each profile. They switch automatically when a profile becomes active and go back to your Balanced choice when the game is closed.",
+    "load_failed": "Couldn't read the governors available on this device."
   }
 }

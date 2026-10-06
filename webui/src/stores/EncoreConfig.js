@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { exec } from 'kernelsu'
 
 import * as KernelSU from '@/helpers/KernelSU'
 
@@ -17,7 +18,19 @@ export const useEncoreConfigStore = defineStore('encoreConfig', () => {
     () => config.value?.preferences?.use_device_mitigation ?? false,
   )
   const isDisableTweaksEnabled = computed(() => config.value?.preferences?.disable_tweaks ?? false)
+  const isProfileNotifyEnabled = computed(
+    () => config.value?.preferences?.notify_profile_change ?? true,
+  )
+  const cpuGovernor = computed(() => config.value?.cpu_governor ?? {})
+  const gpuGovernor = computed(() => config.value?.gpu_governor ?? {})
   const isLoaded = computed(() => config.value !== null)
+
+  // Governors the kernel offers on this device, filled by loadAvailableGovernors()
+  // gpu stays empty on devices without a switchable GPU governor.
+  const availableGovernors = ref({ cpu: [], gpu: [] })
+
+  const GOVERNOR_PROFILES = ['performance', 'balance', 'powersave']
+  const GOVERNOR_KINDS = ['cpu', 'gpu']
 
   const configPath = '/data/adb/.config/encore/config.json'
 
@@ -70,6 +83,68 @@ export const useEncoreConfigStore = defineStore('encoreConfig', () => {
     if (config.value.preferences.log_level === undefined) {
       config.value.preferences.log_level = 5
     }
+    if (config.value.preferences.notify_profile_change === undefined) {
+      config.value.preferences.notify_profile_change = true
+    }
+
+    // Configs written by older versions miss some of these, the daemon fills the
+    // real defaults on its next reload, we only need the objects to exist.
+    if (!config.value.cpu_governor) {
+      config.value.cpu_governor = {}
+    }
+    if (config.value.cpu_governor.performance === undefined) {
+      config.value.cpu_governor.performance = 'performance'
+    }
+    if (!config.value.gpu_governor) {
+      config.value.gpu_governor = {}
+    }
+    if (config.value.gpu_governor.performance === undefined) {
+      config.value.gpu_governor.performance = 'performance'
+    }
+  }
+
+  async function loadAvailableGovernors() {
+    const { errno, stdout, stderr } = await exec(
+      '/data/adb/modules/encore/system/bin/encore_utility list_governors',
+    )
+    if (errno !== 0) {
+      throw new Error(`Failed to list governors: ${stderr}`)
+    }
+
+    const parsed = JSON.parse(stdout.trim())
+    availableGovernors.value = {
+      cpu: Array.isArray(parsed.cpu) ? parsed.cpu : [],
+      gpu: Array.isArray(parsed.gpu) ? parsed.gpu : [],
+    }
+    return availableGovernors.value
+  }
+
+  /**
+   * @param {'cpu'|'gpu'} kind
+   * @param {'performance'|'balance'|'powersave'} profile
+   * @param {string} governor - empty string is accepted for GPU only (= don't touch)
+   */
+  function setGovernor(kind, profile, governor) {
+    if (!GOVERNOR_KINDS.includes(kind)) {
+      throw new Error(`Unknown governor kind: ${kind}`)
+    }
+    if (!GOVERNOR_PROFILES.includes(profile)) {
+      throw new Error(`Unknown profile: ${profile}`)
+    }
+    if (typeof governor !== 'string' || !/^[\w.:,-]*$/.test(governor)) {
+      throw new Error('Invalid governor name')
+    }
+    if (kind === 'cpu' && governor === '') {
+      throw new Error('CPU governor cannot be empty')
+    }
+
+    ensureConfigStructure()
+    config.value[`${kind}_governor`][profile] = governor
+  }
+
+  function setProfileNotify(enabled) {
+    ensureConfigStructure()
+    config.value.preferences.notify_profile_change = enabled
   }
 
   function setLiteMode(enabled) {
@@ -112,6 +187,10 @@ export const useEncoreConfigStore = defineStore('encoreConfig', () => {
         ...config.value.cpu_governor,
         ...(newConfig.cpu_governor || {}),
       },
+      gpu_governor: {
+        ...config.value.gpu_governor,
+        ...(newConfig.gpu_governor || {}),
+      },
     }
   }
 
@@ -123,6 +202,10 @@ export const useEncoreConfigStore = defineStore('encoreConfig', () => {
     logLevel,
     isDeviceMitigationEnabled,
     isDisableTweaksEnabled,
+    isProfileNotifyEnabled,
+    cpuGovernor,
+    gpuGovernor,
+    availableGovernors,
     isLoaded,
 
     loadConfig,
@@ -131,6 +214,9 @@ export const useEncoreConfigStore = defineStore('encoreConfig', () => {
     setLogLevel,
     setDeviceMitigation,
     setDisableTweaks,
+    setProfileNotify,
+    setGovernor,
+    loadAvailableGovernors,
     updateConfig,
   }
 })

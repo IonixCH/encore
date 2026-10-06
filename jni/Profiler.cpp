@@ -15,7 +15,12 @@
  */
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <fstream>
+#include <mutex>
+#include <string>
+#include <thread>
 
 #include "Encore.hpp"
 #include "EncoreLog.hpp"
@@ -62,8 +67,72 @@ void set_profiler_env_vars() {
 
     // Set CPU Governor variables
     EncoreConfigStore::CPUGovernor cpu_governor_preference = config_store.get_cpu_governor();
+    setenv("ENCORE_PERFORMANCE_CPUGOV", cpu_governor_preference.performance.c_str(), 1);
     setenv("ENCORE_BALANCED_CPUGOV", cpu_governor_preference.balance.c_str(), 1);
     setenv("ENCORE_POWERSAVE_CPUGOV", cpu_governor_preference.powersave.c_str(), 1);
+
+    // Set GPU Governor variables, empty value means "leave GPU governor alone"
+    EncoreConfigStore::GPUGovernor gpu_governor_preference = config_store.get_gpu_governor();
+    setenv("ENCORE_PERFORMANCE_GPUGOV", gpu_governor_preference.performance.c_str(), 1);
+    setenv("ENCORE_BALANCED_GPUGOV", gpu_governor_preference.balance.c_str(), 1);
+    setenv("ENCORE_POWERSAVE_GPUGOV", gpu_governor_preference.powersave.c_str(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Profile change announcement (notification + toast)
+// ---------------------------------------------------------------------------
+
+// encore_profiler records which governors it really ended up using, since
+// that can differ from the config (lite mode, device mitigation, governor not
+// available on this kernel...). Format: one "cpu=<gov>" and "gpu=<gov>" line.
+static void read_applied_governors(std::string &cpu_gov, std::string &gpu_gov) {
+    cpu_gov.clear();
+    gpu_gov.clear();
+
+    std::ifstream file(APPLIED_GOV_FILE);
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.rfind("cpu=", 0) == 0) {
+            cpu_gov = line.substr(4);
+        } else if (line.rfind("gpu=", 0) == 0) {
+            gpu_gov = line.substr(4);
+        }
+    }
+}
+
+static void announce_profile(EncoreProfileMode mode, const std::string &detail = "") {
+    if (!config_store.get_preferences().notify_profile_change) return;
+
+    const char *name = "Balanced";
+    switch (mode) {
+        case PERFORMANCE_PROFILE: name = "Performance"; break;
+        case POWERSAVE_PROFILE: name = "Powersave"; break;
+        default: break;
+    }
+
+    std::string cpu_gov, gpu_gov;
+    read_applied_governors(cpu_gov, gpu_gov);
+
+    std::string msg = std::string(name) + " profile active";
+    if (!detail.empty()) msg += " (" + detail + ")";
+    msg += " | CPU: " + (cpu_gov.empty() ? std::string("-") : cpu_gov);
+    if (!gpu_gov.empty()) msg += " | GPU: " + gpu_gov;
+
+    // Don't make the profile switch wait for `cmd` to finish, and when profiles
+    // flip quickly (screen off/on, game start/stop) only the newest one is shown.
+    static std::atomic<uint64_t> latest_ticket{0};
+    static std::mutex announce_mutex;
+    const uint64_t ticket = ++latest_ticket;
+
+    std::thread([msg, ticket]() {
+        std::lock_guard<std::mutex> lock(announce_mutex);
+        if (ticket != latest_ticket.load()) return;
+
+        notify(msg.c_str());
+        toast(msg.c_str());
+    }).detach();
 }
 
 void run_perfcommon(void) {
@@ -97,13 +166,17 @@ void apply_performance_profile(bool lite_mode, std::string game_pkg, pid_t game_
         LOGD("Lite mode is enabled");
         if (system("encore_profiler performance_lite") != 0) {
             LOGE("Unable to execute profiler changes to performance_lite");
+            return;
         }
+        announce_profile(PERFORMANCE_PROFILE, "Lite, " + game_pkg);
         return;
     }
 
     if (system("encore_profiler performance") != 0) {
         LOGE("Unable to execute profiler changes to performance");
+        return;
     }
+    announce_profile(PERFORMANCE_PROFILE, game_pkg);
 }
 
 void apply_balance_profile() {
@@ -119,7 +192,9 @@ void apply_balance_profile() {
 
     if (system("encore_profiler balance") != 0) {
         LOGE("Unable to execute profiler changes to balance");
+        return;
     }
+    announce_profile(BALANCE_PROFILE);
 }
 
 void apply_powersave_profile() {
@@ -135,5 +210,7 @@ void apply_powersave_profile() {
 
     if (system("encore_profiler powersave") != 0) {
         LOGE("Unable to execute profiler changes to powersave");
+        return;
     }
+    announce_profile(POWERSAVE_PROFILE);
 }

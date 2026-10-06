@@ -29,6 +29,53 @@ change_cpu_gov() {
 	echo "$1" | tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor >/dev/null
 }
 
+# Locate the GPU devfreq governor node, prints nothing if there is none.
+# Keep in sync with find_gpu_gov_node() in encore_profiler.sh and service.sh
+find_gpu_gov_node() {
+	[ -f /sys/class/kgsl/kgsl-3d0/devfreq/governor ] && {
+		echo /sys/class/kgsl/kgsl-3d0/devfreq/governor
+		return 0
+	}
+
+	for dev in /sys/class/devfreq/* /sys/devices/platform/*.mali/devfreq/*; do
+		[ -f "$dev/governor" ] || continue
+		case "${dev##*/}" in
+		*bw* | *bus* | *mem* | *ddr* | *llcc* | *cpu* | *dvfsrc*) continue ;;
+		*mali* | *.gpu | *gpu*)
+			echo "$dev/governor"
+			return 0
+			;;
+		esac
+	done
+
+	return 1
+}
+
+# Prints the governors this device offers as JSON, used by the WebUI:
+# {"cpu":["walt","schedutil"],"gpu":["msm-adreno-tz","performance"]}
+# "gpu" is an empty list when the device has no GPU governor to switch.
+list_governors() {
+	json_array() {
+		first=1
+		printf '['
+		for gov in $1; do
+			[ $first -eq 0 ] && printf ','
+			printf '"%s"' "$gov"
+			first=0
+		done
+		printf ']'
+	}
+
+	cpu_avail=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null)
+	[ -z "$cpu_avail" ] && cpu_avail=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_governors 2>/dev/null)
+
+	gpu_avail=""
+	gpu_node=$(find_gpu_gov_node)
+	[ -n "$gpu_node" ] && gpu_avail=$(cat "${gpu_node%/*}/available_governors" 2>/dev/null)
+
+	printf '{"cpu":%s,"gpu":%s}\n' "$(json_array "$cpu_avail")" "$(json_array "$gpu_avail")"
+}
+
 save_logs() {
 	report_dir="$MODULE_CONFIG/encore_bugreport_temp"
 	mkdir -p "$report_dir/pstore"

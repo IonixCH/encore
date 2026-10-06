@@ -49,6 +49,18 @@
 void notify(const char *message);
 
 /**
+ * @brief Shows a toast message (best effort).
+ *
+ * Android has no shell command for toast, so this relies on the helper app
+ * "bellavita.toast". If it is not installed this function does nothing and
+ * returns quietly, the notification posted by notify() still works.
+ *
+ * @param message The message to show.
+ * @note It is only intended for use in an Android environment.
+ */
+void toast(const char *message);
+
+/**
  * @brief Sets the do not disturb mode via shell.
  *
  * @param do_not_disturb True to enable DND mode, false to disable.
