@@ -32,6 +32,8 @@
 #define CONFIG_FILE CONFIG_DIR "/config.json"
 #define DEVICE_MITIGATION_FILE CONFIG_DIR "/device_mitigation.json"
 #define DEFAULT_CPU_GOV CONFIG_DIR "/default_cpu_gov"
+#define DEFAULT_GPU_GOV CONFIG_DIR "/default_gpu_gov"
+#define APPLIED_GOV_FILE CONFIG_DIR "/applied_governors"
 #define ENCORE_GAMELIST CONFIG_DIR "/gamelist.json"
 #define SYSTEM_STATUS_FILE CONFIG_DIR "/system_status"
 

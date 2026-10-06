@@ -30,6 +30,13 @@ SOC=$(<$MODULE_CONFIG/soc_recognition)
 # Default CPU Governor
 DEFAULT_CPU_GOV="$ENCORE_BALANCED_CPUGOV"
 
+# Governors that are really in use after a profile is applied,
+# read by the daemon to build the profile notification.
+APPLIED_GOV_FILE="$MODULE_CONFIG/applied_governors"
+
+# Filled by change_gpu_gov()
+GPU_APPLIED_GOV=""
+
 # Just a note that lite mode is now controlled by script arg, check case
 # statement on the EOF and performance_profile() function.
 
@@ -59,6 +66,73 @@ change_cpu_gov() {
 	chown 0:0 /sys/devices/system/cpu/cpufreq/policy*/scaling_governor
 	echo "$1" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >/dev/null
 	echo "$1" | tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor >/dev/null
+}
+
+# Pick a CPU governor that the kernel really offers.
+# $1 = wanted governor, $2 = fallback
+resolve_cpu_gov() {
+	avail="/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"
+	if [ -n "$1" ] && [ -f "$avail" ] && tr ' ' '\n' <"$avail" | grep -qx "$1"; then
+		echo "$1"
+	else
+		echo "$2"
+	fi
+}
+
+# Locate the GPU devfreq governor node.
+# Prints the path, or nothing when the device doesn't expose one
+# (MediaTek for example), GPU governor switching is skipped there.
+find_gpu_gov_node() {
+	# Qualcomm Adreno
+	[ -f /sys/class/kgsl/kgsl-3d0/devfreq/governor ] && {
+		echo /sys/class/kgsl/kgsl-3d0/devfreq/governor
+		return 0
+	}
+
+	# Mali (Exynos, Tensor, Unisoc, ...) and other GPU devfreq nodes
+	for dev in /sys/class/devfreq/* /sys/devices/platform/*.mali/devfreq/*; do
+		[ -f "$dev/governor" ] || continue
+		case "${dev##*/}" in
+		# Buses, memory and friends are not the GPU
+		*bw* | *bus* | *mem* | *ddr* | *llcc* | *cpu* | *dvfsrc*) continue ;;
+		*mali* | *.gpu | *gpu*)
+			echo "$dev/governor"
+			return 0
+			;;
+		esac
+	done
+
+	return 1
+}
+
+# $1 = governor to use, empty means "don't touch the GPU governor".
+# Only governors listed in available_governors are accepted.
+change_gpu_gov() {
+	GPU_APPLIED_GOV=""
+
+	node=$(find_gpu_gov_node) || return 1
+	[ -z "$node" ] && return 1
+
+	if [ -n "$1" ]; then
+		avail="${node%/*}/available_governors"
+		if [ ! -f "$avail" ] || tr ' ' '\n' <"$avail" | grep -qx "$1"; then
+			chmod 644 "$node" 2>/dev/null
+			echo "$1" >"$node" 2>/dev/null
+		fi
+	fi
+
+	# Report what the GPU is really using now
+	GPU_APPLIED_GOV=$(cat "$node" 2>/dev/null)
+}
+
+write_applied_governors() {
+	cpu_now=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor 2>/dev/null)
+	[ -z "$cpu_now" ] && cpu_now=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
+
+	{
+		echo "cpu=$cpu_now"
+		echo "gpu=$GPU_APPLIED_GOV"
+	} >"$APPLIED_GOV_FILE" 2>/dev/null
 }
 
 ###################################
@@ -826,15 +900,24 @@ performance_profile() {
 	# Memory tweak
 	apply 80 /proc/sys/vm/vfs_cache_pressure
 
-	# Set CPU governor to performance.
+	# Set CPU governor to the one chosen for the performance profile
+	# (defaults to "performance").
 	# If lite mode enabled, use the default governor instead.
-	# device mitigation also will prevent performance gov to be
-	# applied (some device hates performance governor).
-	if [ $LITE_MODE -eq 0 ] && [ -z "$ENCORE_NO_PERFORMANCE_CPUGOV" ]; then
-		change_cpu_gov performance
-	else
-		change_cpu_gov "$DEFAULT_CPU_GOV"
+	# device mitigation also will prevent the plain performance gov to be
+	# applied (some device hates performance governor), a governor the
+	# user picked on purpose is still respected.
+	cpu_perf_gov="${ENCORE_PERFORMANCE_CPUGOV:-performance}"
+	if [ $LITE_MODE -eq 1 ]; then
+		cpu_perf_gov="$DEFAULT_CPU_GOV"
+	elif [ -n "$ENCORE_NO_PERFORMANCE_CPUGOV" ] && [ "$cpu_perf_gov" = "performance" ]; then
+		cpu_perf_gov="$DEFAULT_CPU_GOV"
 	fi
+	change_cpu_gov "$(resolve_cpu_gov "$cpu_perf_gov" "$DEFAULT_CPU_GOV")"
+
+	# Same idea for the GPU governor
+	gpu_perf_gov="$ENCORE_PERFORMANCE_GPUGOV"
+	[ $LITE_MODE -eq 1 ] && gpu_perf_gov="$ENCORE_BALANCED_GPUGOV"
+	change_gpu_gov "$gpu_perf_gov"
 
 	# Force CPU to highest possible frequency.
 	if [ -d /proc/ppm ]; then
@@ -862,6 +945,8 @@ performance_profile() {
 	esac
 
 	echo 3 >/proc/sys/vm/drop_caches
+
+	write_applied_governors
 }
 
 balance_profile() {
@@ -909,6 +994,9 @@ balance_profile() {
 	# Restore min CPU frequency
 	change_cpu_gov "$DEFAULT_CPU_GOV"
 
+	# Back to the GPU governor chosen for balance profile
+	change_gpu_gov "$ENCORE_BALANCED_GPUGOV"
+
 	if [ -d /proc/ppm ]; then
 		cpufreq_ppm_unlock
 	else
@@ -932,6 +1020,8 @@ balance_profile() {
 	5) tensor_normal ;;
 	6) tegra_normal ;;
 	esac
+
+	write_applied_governors
 }
 
 powersave_profile() {
@@ -949,8 +1039,9 @@ powersave_profile() {
 		fi
 	}
 
-	# CPU governor
+	# CPU and GPU governor
 	change_cpu_gov "$ENCORE_POWERSAVE_CPUGOV"
+	change_gpu_gov "$ENCORE_POWERSAVE_GPUGOV"
 
 	case $SOC in
 	1) mediatek_powersave ;;
@@ -960,6 +1051,8 @@ powersave_profile() {
 	5) tensor_powersave ;;
 	6) tegra_powersave ;;
 	esac
+
+	write_applied_governors
 }
 
 ###################################

@@ -76,14 +76,23 @@ bool EncoreConfigStore::save_config(const std::string &config_path) {
     prefs_obj.AddMember("enforce_lite_mode", config_.preferences.enforce_lite_mode, allocator);
     prefs_obj.AddMember("use_device_mitigation", config_.preferences.use_device_mitigation, allocator);
     prefs_obj.AddMember("disable_tweaks", config_.preferences.disable_tweaks, allocator);
+    prefs_obj.AddMember("notify_profile_change", config_.preferences.notify_profile_change, allocator);
     prefs_obj.AddMember("log_level", config_.preferences.log_level, allocator);
     doc.AddMember("preferences", prefs_obj, allocator);
 
     // Serialize CPU governor
     rapidjson::Value cpu_gov_obj(rapidjson::kObjectType);
+    cpu_gov_obj.AddMember("performance", rapidjson::Value(config_.cpu_governor.performance.c_str(), allocator).Move(), allocator);
     cpu_gov_obj.AddMember("balance", rapidjson::Value(config_.cpu_governor.balance.c_str(), allocator).Move(), allocator);
     cpu_gov_obj.AddMember("powersave", rapidjson::Value(config_.cpu_governor.powersave.c_str(), allocator).Move(), allocator);
     doc.AddMember("cpu_governor", cpu_gov_obj, allocator);
+
+    // Serialize GPU governor
+    rapidjson::Value gpu_gov_obj(rapidjson::kObjectType);
+    gpu_gov_obj.AddMember("performance", rapidjson::Value(config_.gpu_governor.performance.c_str(), allocator).Move(), allocator);
+    gpu_gov_obj.AddMember("balance", rapidjson::Value(config_.gpu_governor.balance.c_str(), allocator).Move(), allocator);
+    gpu_gov_obj.AddMember("powersave", rapidjson::Value(config_.gpu_governor.powersave.c_str(), allocator).Move(), allocator);
+    doc.AddMember("gpu_governor", gpu_gov_obj, allocator);
 
     rapidjson::StringBuffer buffer;
     rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
@@ -118,6 +127,11 @@ EncoreConfigStore::CPUGovernor EncoreConfigStore::get_cpu_governor() const {
     return config_.cpu_governor;
 }
 
+EncoreConfigStore::GPUGovernor EncoreConfigStore::get_gpu_governor() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return config_.gpu_governor;
+}
+
 void EncoreConfigStore::set_preferences(const Preferences &prefs) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.preferences = prefs;
@@ -126,6 +140,11 @@ void EncoreConfigStore::set_preferences(const Preferences &prefs) {
 void EncoreConfigStore::set_cpu_governor(const CPUGovernor &governor) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_.cpu_governor = governor;
+}
+
+void EncoreConfigStore::set_gpu_governor(const GPUGovernor &governor) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    config_.gpu_governor = governor;
 }
 
 std::string EncoreConfigStore::get_config_path() const {
@@ -156,8 +175,29 @@ std::string EncoreConfigStore::read_default_cpu_governor() const {
     return default_governor;
 }
 
+std::string EncoreConfigStore::read_default_gpu_governor() const {
+    // Not every GPU exposes a governor (MediaTek, for example), in that
+    // case service.sh doesn't create the file and we return empty string,
+    // which means "leave the GPU governor alone".
+    std::string default_governor;
+
+    std::ifstream file(DEFAULT_GPU_GOV);
+    if (!file.is_open()) {
+        LOGD_TAG("EncoreConfigStore", "Default GPU governor file not found, GPU governor switching stays idle");
+        return default_governor;
+    }
+
+    if (!std::getline(file, default_governor)) {
+        default_governor.clear();
+    }
+
+    LOGD_TAG("EncoreConfigStore", "Read default GPU governor from file: '{}'", default_governor);
+    return default_governor;
+}
+
 bool EncoreConfigStore::create_default_config() {
     std::string default_governor = read_default_cpu_governor();
+    std::string default_gpu_governor = read_default_gpu_governor();
 
     // clang-format off
     ConfigData default_config = ConfigData{
@@ -165,11 +205,18 @@ bool EncoreConfigStore::create_default_config() {
             .enforce_lite_mode = false,
             .use_device_mitigation = false,
             .disable_tweaks = false,
+            .notify_profile_change = true,
             .log_level = 4
         },
         .cpu_governor = {
+            .performance = "performance",
             .balance = default_governor,
             .powersave = default_governor
+        },
+        .gpu_governor = {
+            .performance = "performance",
+            .balance = default_gpu_governor,
+            .powersave = default_gpu_governor
         }
     };
     // clang-format on
@@ -184,6 +231,8 @@ bool EncoreConfigStore::create_default_config() {
 
 bool EncoreConfigStore::parse_config(const rapidjson::Document &doc) {
     ConfigData new_config;
+    bool needs_migration = !doc.HasMember("preferences") || !doc["preferences"].IsObject() ||
+                           !doc["preferences"].HasMember("notify_profile_change");
 
     // Parse preferences
     if (doc.HasMember("preferences") && doc["preferences"].IsObject()) {
@@ -201,6 +250,10 @@ bool EncoreConfigStore::parse_config(const rapidjson::Document &doc) {
             new_config.preferences.disable_tweaks = prefs["disable_tweaks"].GetBool();
         }
 
+        if (prefs.HasMember("notify_profile_change") && prefs["notify_profile_change"].IsBool()) {
+            new_config.preferences.notify_profile_change = prefs["notify_profile_change"].GetBool();
+        }
+
         if (prefs.HasMember("log_level") && prefs["log_level"].IsInt()) {
             new_config.preferences.log_level = prefs["log_level"].GetInt();
         }
@@ -209,6 +262,12 @@ bool EncoreConfigStore::parse_config(const rapidjson::Document &doc) {
     // Parse CPU governor
     if (doc.HasMember("cpu_governor") && doc["cpu_governor"].IsObject()) {
         const rapidjson::Value &gov = doc["cpu_governor"];
+
+        if (gov.HasMember("performance") && gov["performance"].IsString()) {
+            new_config.cpu_governor.performance = gov["performance"].GetString();
+        } else {
+            needs_migration = true;
+        }
 
         if (gov.HasMember("balance") && gov["balance"].IsString()) {
             new_config.cpu_governor.balance = gov["balance"].GetString();
@@ -219,11 +278,44 @@ bool EncoreConfigStore::parse_config(const rapidjson::Document &doc) {
         }
     }
 
+    // Parse GPU governor.
+    // Configs written by older versions don't have this block, fill it with
+    // defaults (device's own GPU governor) and persist it afterwards.
+    if (doc.HasMember("gpu_governor") && doc["gpu_governor"].IsObject()) {
+        const rapidjson::Value &gov = doc["gpu_governor"];
+
+        if (gov.HasMember("performance") && gov["performance"].IsString()) {
+            new_config.gpu_governor.performance = gov["performance"].GetString();
+        }
+
+        if (gov.HasMember("balance") && gov["balance"].IsString()) {
+            new_config.gpu_governor.balance = gov["balance"].GetString();
+        }
+
+        if (gov.HasMember("powersave") && gov["powersave"].IsString()) {
+            new_config.gpu_governor.powersave = gov["powersave"].GetString();
+        }
+    } else {
+        const std::string default_gpu_governor = read_default_gpu_governor();
+        new_config.gpu_governor.balance = default_gpu_governor;
+        new_config.gpu_governor.powersave = default_gpu_governor;
+        needs_migration = true;
+    }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         config_ = new_config;
     }
 
     LOGI_TAG("EncoreConfigStore", "Configuration loaded from {}", config_path_);
+
+    // Write back missing keys so WebUI always sees a complete config.
+    // The follow-up reload triggered by inotify has nothing left to migrate,
+    // so this can't loop.
+    if (needs_migration) {
+        LOGI_TAG("EncoreConfigStore", "Config is missing newer keys, migrating");
+        save_config(config_path_);
+    }
+
     return true;
 }

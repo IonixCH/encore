@@ -33,10 +33,22 @@ public:
         bool enforce_lite_mode = false;
         bool use_device_mitigation = false;
         bool disable_tweaks = false;
+        bool notify_profile_change = true;
         int log_level = 4;
     };
 
+    /**
+     * @brief Governor choice per profile.
+     * @note For GPU, an empty string means "don't touch the GPU governor".
+     */
     struct CPUGovernor {
+        std::string performance = "performance";
+        std::string balance;
+        std::string powersave;
+    };
+
+    struct GPUGovernor {
+        std::string performance = "performance";
         std::string balance;
         std::string powersave;
     };
@@ -44,6 +56,7 @@ public:
     struct ConfigData {
         Preferences preferences;
         CPUGovernor cpu_governor;
+        GPUGovernor gpu_governor;
     };
 
     /**
@@ -84,6 +97,11 @@ public:
     CPUGovernor get_cpu_governor() const;
 
     /**
+     * @brief Get GPU governor settings
+     */
+    GPUGovernor get_gpu_governor() const;
+
+    /**
      * @brief Update preferences
      */
     void set_preferences(const Preferences &prefs);
@@ -92,6 +110,11 @@ public:
      * @brief Update CPU governor settings
      */
     void set_cpu_governor(const CPUGovernor &governor);
+
+    /**
+     * @brief Update GPU governor settings
+     */
+    void set_gpu_governor(const GPUGovernor &governor);
 
     /**
      * @brief Get config file path
@@ -114,6 +137,11 @@ private:
      * @brief Read default CPU governor from file
      */
     std::string read_default_cpu_governor() const;
+
+    /**
+     * @brief Read default GPU governor from file (empty if unsupported/unknown)
+     */
+    std::string read_default_gpu_governor() const;
 
     /**
      * @brief Create default configuration file

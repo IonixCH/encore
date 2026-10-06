@@ -12,6 +12,7 @@ import GameSettings from '@/views/GameSettings.vue'
 import LanguageSelection from '@/views/LanguageSelection.vue'
 import LogLevelSelection from '@/views/LogLevelSelection.vue'
 import DeviceMitigation from '@/views/DeviceMitigation.vue'
+import ProfileGovernors from '@/views/ProfileGovernors.vue'
 
 const routes = [
   {
@@ -55,6 +56,11 @@ const routes = [
     path: '/settings/device_mitigation',
     name: 'DeviceMitigation',
     component: DeviceMitigation,
+  },
+  {
+    path: '/settings/profile_governors',
+    name: 'ProfileGovernors',
+    component: ProfileGovernors,
   },
   {
     path: '/settings/log_level',

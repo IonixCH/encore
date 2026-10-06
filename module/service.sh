@@ -32,6 +32,37 @@ chmod 644 "$CPUFREQ/scaling_governor"
 default_gov=$(cat "$CPUFREQ/scaling_governor")
 echo "$default_gov" >$MODULE_CONFIG/default_cpu_gov
 
+# Parse GPU Governor to use (not every device exposes one, MediaTek for example)
+find_gpu_gov_node() {
+	[ -f /sys/class/kgsl/kgsl-3d0/devfreq/governor ] && {
+		echo /sys/class/kgsl/kgsl-3d0/devfreq/governor
+		return 0
+	}
+
+	for dev in /sys/class/devfreq/* /sys/devices/platform/*.mali/devfreq/*; do
+		[ -f "$dev/governor" ] || continue
+		case "${dev##*/}" in
+		*bw* | *bus* | *mem* | *ddr* | *llcc* | *cpu* | *dvfsrc*) continue ;;
+		*mali* | *.gpu | *gpu*)
+			echo "$dev/governor"
+			return 0
+			;;
+		esac
+	done
+
+	return 1
+}
+
+GPU_GOV_NODE=$(find_gpu_gov_node)
+default_gpu_gov=""
+if [ -n "$GPU_GOV_NODE" ]; then
+	chmod 644 "$GPU_GOV_NODE"
+	default_gpu_gov=$(cat "$GPU_GOV_NODE")
+	echo "$default_gpu_gov" >$MODULE_CONFIG/default_gpu_gov
+else
+	rm -f "$MODULE_CONFIG/default_gpu_gov"
+fi
+
 # Create cleanup script
 [ ! -f "$CLEANUP_SCRIPT" ] && {
   mkdir -p "$(dirname $CLEANUP_SCRIPT)"
@@ -72,6 +103,23 @@ fi
 
 # Revert to normal CPU governor
 echo "$default_gov" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# Handle case when default GPU governor is performance, same idea as the CPU
+if [ -n "$GPU_GOV_NODE" ]; then
+	if [ "$default_gpu_gov" == "performance" ]; then
+		gpu_avail="${GPU_GOV_NODE%/*}/available_governors"
+		for gov in msm-adreno-tz simple_ondemand mali_ondemand ondemand; do
+			grep -qw "$gov" "$gpu_avail" 2>/dev/null && {
+				echo "$gov" >$MODULE_CONFIG/default_gpu_gov
+				default_gpu_gov="$gov"
+				break
+			}
+		done
+	fi
+
+	# Revert to normal GPU governor
+	echo "$default_gpu_gov" >"$GPU_GOV_NODE"
+fi
 
 # Mitigate buggy thermal throttling on post-startup
 # in old MediaTek devices.

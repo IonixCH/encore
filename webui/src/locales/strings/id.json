@@ -69,6 +69,10 @@
     "disable_tweaks": {
       "title": "Matikan Tweak",
       "description": "Nonaktifkan semua penyesuaian performa yang diatur oleh Encore Tweaks"
+    },
+    "profile_governors": {
+      "title": "Governor Profil",
+      "description": "Pilih governor CPU dan GPU untuk tiap profil, plus notifikasi profil"
     }
   },
   "game_settings": {
@@ -118,7 +122,8 @@
     "shortcut_unavailable": "Tidak ada API yang tersedia untuk fitur ini. Perbarui manajer Anda untuk menggunakannya.",
     "failed_open_external_browser": "Gagal membuka browser eksternal.",
     "success_save_log": "Log berhasil disimpan di {path}",
-    "failed_save_log": "Gagal menyimpan log."
+    "failed_save_log": "Gagal menyimpan log.",
+    "profile_changed": "Profil {profile} aktif"
   },
   "navigation": {
     "home": "Beranda",
@@ -144,5 +149,18 @@
     "description": "Perubahan ini memerlukan reboot agar berlaku. Apakah Anda ingin melakukan reboot sekarang?",
     "reboot": "Reboot Sekarang",
     "later": "Nanti"
+  },
+  "profile_governors": {
+    "title": "Governor Profil",
+    "notify_title": "Notifikasi profil",
+    "notify_brief": "Tampilkan notifikasi setiap kali profil aktif berganti. Toast juga muncul kalau aplikasi Toast helper (bellavita.toast) terpasang.",
+    "cpu": "Governor CPU",
+    "gpu": "Governor GPU",
+    "gpu_unsupported": "Tidak didukung di perangkat ini",
+    "gpu_keep": "Jangan diubah (bawaan perangkat)",
+    "choose_cpu": "{profile}: Governor CPU",
+    "choose_gpu": "{profile}: Governor GPU",
+    "brief": "Pilih governor yang diterapkan Encore ke CPU dan GPU di tiap profil. Governor berpindah otomatis saat profil aktif dan kembali ke pilihan profil Seimbang saat game ditutup.",
+    "load_failed": "Gagal membaca daftar governor yang tersedia di perangkat ini."
   }
 }
